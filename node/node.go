@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -9,10 +10,20 @@ import (
 )
 
 func main() {
+	// now passing args which has names so check
+	if len(os.Args) < 2 {
+		log.Fatal("usage: node <username>")
+	}
+	username := os.Args[1]
+
 	conn, err := net.Dial("tcp", "127.0.0.1:9000")
 
 	if err != nil {
 		log.Fatal(err)
+	}
+	// Send username as the first line (handshake)
+	if _, err := fmt.Fprintln(conn, username); err != nil {
+		log.Fatal("failed to send username:", err)
 	}
 
 	defer conn.Close()

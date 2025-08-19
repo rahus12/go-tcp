@@ -2,11 +2,41 @@
 package main
 
 import (
+	"bufio"
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 )
+
+// to add a username to the clients, which also allows for rejoin
+// fancy way of declaring multple variable instead of writing var again and again
+var (
+	clients = make(map[string]net.Conn) // username -> conn
+	mu      sync.Mutex                  // protects clients
+)
+
+// read the first line as the username (trim newline)
+func readUsername(c net.Conn) (string, error) {
+	r := bufio.NewReader(c)
+	name, err := r.ReadString('\n') // read till encounters first occ of delimiter
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(name), nil // like python strip, removes all whitespaces from both sides
+}
+
+func register(username string, c net.Conn) {
+	mu.Lock()
+	defer mu.Unlock() // same as writing it at the end but is prefered incase the program panics
+	//ok is to check if the key exists or not
+	if old, ok := clients[username]; ok && old != nil {
+		_ = old.Close() // drop prev session
+	}
+	clients[username] = c
+	log.Printf("user %q registered from %v\n", username, c.RemoteAddr())
+}
 
 // creating a single function named pipe to transfer data from one end ot another
 // avoids creating seperate sender and reciever
@@ -31,32 +61,63 @@ func main() {
 	defer ln.Close()
 	log.Println("listening on port :9000")
 
-	log.Println("waiting for reciever...")
+	for {
+		// Accept first node
+		log.Println("waiting for first node...")
+		//note: ln.ACcept is a blocking code
+		aConn, err := ln.Accept()
+		if err != nil {
+			log.Println("accept error:", err)
+			continue
+		}
+		aName, err := readUsername(aConn)
+		if err != nil || aName == "" {
+			log.Println("failed to read username for first node:", err)
+			_ = aConn.Close()
+			continue
+		}
+		register(aName, aConn)
 
-	reciever, err := ln.Accept()
-	if err != nil {
-		log.Fatal(err)
+		// Accept second node
+		log.Println("waiting for second node...")
+		bConn, err := ln.Accept()
+		if err != nil {
+			log.Println("accept error:", err)
+			_ = aConn.Close()
+			continue
+		}
+		bName, err := readUsername(bConn)
+		if err != nil || bName == "" {
+			log.Println("failed to read username for second node:", err)
+			_ = bConn.Close()
+			_ = aConn.Close()
+			continue
+		}
+		register(bName, bConn)
+
+		log.Printf("pairing %q <-> %q\n", aName, bName)
+
+		// Bidirectional piping for this pair
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go pipe(&wg, clients[bName], clients[aName]) // a -> b
+		go pipe(&wg, clients[aName], clients[bName]) // b -> a
+
+		// Wait until both directions are done
+		wg.Wait()
+
+		// Cleanup this pair (remove dead conns from map)
+		mu.Lock()
+		if clients[aName] != nil {
+			_ = clients[aName].Close()
+			clients[aName] = nil
+		}
+		if clients[bName] != nil {
+			_ = clients[bName].Close()
+			clients[bName] = nil
+		}
+		mu.Unlock()
+
+		log.Printf("pair %q <-> %q closed; awaiting next pair...\n", aName, bName)
 	}
-	log.Println("reciever connected from", reciever.RemoteAddr())
-
-	log.Println("waiting for sender...")
-	sender, err := ln.Accept()
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Println("sender connected from", sender.RemoteAddr())
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	//forward everything for sender to reciever
-
-	// below is a way to initiate just before if checking
-	go pipe(&wg, reciever, sender)
-	go pipe(&wg, sender, reciever)
-
-	wg.Wait()
-	log.Println("connection pair closed")
 }
