@@ -13,8 +13,9 @@ import (
 // to add a username to the clients, which also allows for rejoin
 // fancy way of declaring multple variable instead of writing var again and again
 var (
-	clients = make(map[string]net.Conn) // username -> conn
-	mu      sync.Mutex                  // protects clients
+	clients    = make(map[string]net.Conn) // username -> conn
+	mu         sync.Mutex                  // protects clients
+	nameByConn = make(map[net.Conn]string) // conn -> username
 )
 
 // read the first line as the username (trim newline)
@@ -35,6 +36,7 @@ func register(username string, c net.Conn) {
 		_ = old.Close() // drop prev session
 	}
 	clients[username] = c
+	nameByConn[c] = username
 	log.Printf("user %q registered from %v\n", username, c.RemoteAddr())
 }
 
@@ -42,11 +44,31 @@ func register(username string, c net.Conn) {
 // avoids creating seperate sender and reciever
 // this now allows us to us goroutines and form bi-directional connections
 // short hand for repeating types
-
-func pipe(wg *sync.WaitGroup, dst, src net.Conn) {
+// evolve from pipe to pipelabelled which takes srcName to prepend it to show like alice: hi
+func pipeLabeled(wg *sync.WaitGroup, dst, src net.Conn, srcName string) {
 	defer wg.Done()
-	if _, err := io.Copy(dst, src); err != nil {
-		log.Println("copy error: ", err)
+	// if _, err := io.Copy(dst, src); err != nil {
+	// 	log.Println("copy error: ", err)
+	// }
+
+	r := bufio.NewScanner(src)
+	buf := make([]byte, 0, 64*1024) // 64KB initial size
+	r.Buffer(buf, 1024*1024)        // max size 1MB
+
+	for r.Scan() {
+		line := strings.TrimRight(r.Text(), "\r\n")
+		if line == "" {
+			continue
+		}
+
+		_, err := io.WriteString(dst, srcName+": "+line+"\n")
+		if err != nil {
+			log.Println("write error:", err)
+			return
+		}
+	}
+	if err := r.Err(); err != nil && err != io.EOF {
+		log.Println("read error:", err)
 	}
 }
 
@@ -100,8 +122,9 @@ func main() {
 		// Bidirectional piping for this pair
 		var wg sync.WaitGroup
 		wg.Add(2)
-		go pipe(&wg, clients[bName], clients[aName]) // a -> b
-		go pipe(&wg, clients[aName], clients[bName]) // b -> a
+		// evolved from pipe to pipeLabeled
+		go pipeLabeled(&wg, clients[bName], clients[aName], aName) // a -> b
+		go pipeLabeled(&wg, clients[aName], clients[bName], bName) // b -> a
 
 		// Wait until both directions are done
 		wg.Wait()
