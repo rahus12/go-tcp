@@ -1,4 +1,5 @@
 // let this be a simple tcp server
+// evolved to named entity chat server
 package main
 
 import (
@@ -16,6 +17,7 @@ var (
 	clients    = make(map[string]net.Conn) // username -> conn
 	mu         sync.Mutex                  // protects clients
 	nameByConn = make(map[net.Conn]string) // conn -> username
+
 )
 
 // read the first line as the username (trim newline)
@@ -45,7 +47,8 @@ func register(username string, c net.Conn) {
 // this now allows us to us goroutines and form bi-directional connections
 // short hand for repeating types
 // evolve from pipe to pipelabelled which takes srcName to prepend it to show like alice: hi
-func pipeLabeled(wg *sync.WaitGroup, dst, src net.Conn, srcName string) {
+// evolved from pipeLabelled to handleConn
+func handleConn(wg *sync.WaitGroup, dst, src net.Conn, srcName string) {
 	defer wg.Done()
 	// if _, err := io.Copy(dst, src); err != nil {
 	// 	log.Println("copy error: ", err)
@@ -72,7 +75,8 @@ func pipeLabeled(wg *sync.WaitGroup, dst, src net.Conn, srcName string) {
 	}
 }
 
-func main() {
+func mainold() {
+
 	// need a listner
 	ln, err := net.Listen("tcp", ":9000")
 
@@ -123,8 +127,10 @@ func main() {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		// evolved from pipe to pipeLabeled
-		go pipeLabeled(&wg, clients[bName], clients[aName], aName) // a -> b
-		go pipeLabeled(&wg, clients[aName], clients[bName], bName) // b -> a
+		go handleConn(&wg, clients[bName], clients[aName], aName) // a -> b
+		go handleConn(&wg, clients[aName], clients[bName], bName) // b -> a
+		// go handleConn(aConn)
+		// go handleConn(bConn)
 
 		// Wait until both directions are done
 		wg.Wait()

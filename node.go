@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-func main() {
+func notmain() {
 	// now passing args which has names so check
 	if len(os.Args) < 2 {
 		log.Fatal("usage: node <username>")
